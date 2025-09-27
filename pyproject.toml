@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spatial-hud"
+version = "0.1.0"
+description = "Assistive spatial audio HUD for single-sided hearing gamers"
+authors = [{name = "HearMeOut"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "sounddevice>=0.4",
+    "pygame>=2.5",
+    "pywin32>=306",
+    "soundcard>=0.4.3"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "black>=24.0",
+    "mypy>=1.10"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

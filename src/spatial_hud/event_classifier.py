@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
@@ -45,6 +46,9 @@ class ClassifierConfig:
     dynamic_energy_multiplier: float = 1.5
     ambient_decay_alpha: float = 0.05
     ambient_update_margin: float = 1.25
+    front_back_positive_threshold: float = 0.15
+    front_back_negative_threshold: float = -0.15
+    front_back_ambiguous_scale: float = 0.8
 
     # Distance estimation
     near_energy: float = 0.08
@@ -148,10 +152,19 @@ class EventClassifier:
             kind = "ambient"
             confidence = 0.0
 
+        if feature.front_back_score <= cfg.front_back_negative_threshold:
+            orientation = "back"
+        elif feature.front_back_score >= cfg.front_back_positive_threshold:
+            orientation = "front"
+        else:
+            orientation = "ambiguous"
+
         distance = self.classify_distance(feature.energy, baseline_energy)
 
+        adjusted_azimuth = _project_azimuth(feature.azimuth_deg, orientation)
+
         logger.debug(
-            "Classified event: kind=%s score=%.2f energy=%.3f centroid=%.1f onset=%.3f low=%.3f mid=%.3f high=%.3f flat=%.2f ratio_high_mid=%.2f ratio_low_mid=%.2f distance=%s",
+            "Classified event: kind=%s score=%.2f energy=%.3f centroid=%.1f onset=%.3f low=%.3f mid=%.3f high=%.3f flat=%.2f ratio_high_mid=%.2f ratio_low_mid=%.2f fb_score=%.2f orientation=%s distance=%s",
             kind,
             best_score,
             feature.energy,
@@ -163,17 +176,24 @@ class EventClassifier:
             feature.spectral_flatness,
             high_mid_ratio,
             low_mid_ratio,
+            feature.front_back_score,
+            orientation,
             distance.value,
         )
 
         if kind == "ambient" or feature.energy <= cfg.ambient_energy_floor * cfg.ambient_update_margin:
             self._ambient.observe(feature)
 
+        if orientation == "ambiguous" and kind != "ambient":
+            confidence *= cfg.front_back_ambiguous_scale
+
         return Event(
             kind=kind,
-            azimuth_deg=feature.azimuth_deg,
+            azimuth_deg=adjusted_azimuth,
             distance_bucket=distance,
             confidence=float(np.clip(confidence, 0.0, 1.0)),
+            orientation=orientation,
+            raw_azimuth_deg=feature.azimuth_deg,
         )
 
     def stream(self, features: Iterable[FeaturePacket]) -> Iterator[Event]:
@@ -182,3 +202,17 @@ class EventClassifier:
             if event.kind == "ambient":
                 continue
             yield event
+
+
+def _project_azimuth(raw_angle: float, orientation: str) -> float:
+    angle_rad = math.radians(raw_angle)
+    if orientation == "back":
+        front_sign = -1.0
+    else:
+        front_sign = 1.0
+    x = math.sin(angle_rad)
+    y = math.cos(angle_rad) * front_sign
+    adjusted = math.degrees(math.atan2(x, y))
+    if adjusted < 0:
+        adjusted += 360.0
+    return adjusted

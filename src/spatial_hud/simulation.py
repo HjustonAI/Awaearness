@@ -16,6 +16,7 @@ def _synthetic_feature(
     onset_strength: float,
     centroid: float,
     bands: list[float],
+    orientation: str = "front",
 ) -> FeaturePacket:
     band_arr = np.array(bands, dtype=float)
     third = len(band_arr) // 3 or 1
@@ -26,6 +27,8 @@ def _synthetic_feature(
     spectral_flatness = float(
         np.exp(np.mean(np.log(band_arr + eps))) / (np.mean(band_arr + eps) + eps)
     )
+
+    front_back_score = 0.6 if orientation == "front" else (-0.6 if orientation == "back" else 0.0)
 
     return FeaturePacket(
         timestamp=time.time(),
@@ -38,6 +41,7 @@ def _synthetic_feature(
         mid_band_energy=mid_band,
         high_band_energy=high_band,
         spectral_flatness=spectral_flatness,
+        front_back_score=front_back_score,
     )
 
 
@@ -48,6 +52,7 @@ def offline_feature_stream(duration_s: float = 30.0, seed: int | None = None) ->
     while time.time() - start < duration_s:
         mode = rng.choice(["footstep", "vehicle", "gunfire", "ambient", "ambient"])
         azimuth = rng.uniform(-90, 90)
+        orientation = rng.choice(["front", "back"]) if mode != "ambient" else "front"
         if mode == "footstep":
             energy = rng.uniform(0.05, 0.1)
             onset = rng.uniform(0.08, 0.2)
@@ -68,6 +73,7 @@ def offline_feature_stream(duration_s: float = 30.0, seed: int | None = None) ->
             onset = rng.uniform(0.0, 0.01)
             centroid = rng.uniform(5, 15)
             bands = [rng.uniform(0.001, 0.01) for _ in range(32)]
+            orientation = "front"
 
-        yield _synthetic_feature(azimuth, energy, onset, centroid, bands)
+        yield _synthetic_feature(azimuth, energy, onset, centroid, bands, orientation)
         time.sleep(0.05)

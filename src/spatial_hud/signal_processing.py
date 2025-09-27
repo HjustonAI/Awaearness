@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
@@ -18,17 +19,25 @@ class DirectionEstimator:
         max_tau: float = 0.0007,
         num_angles: int = 36,
         smoothing_alpha: float = 0.4,
+        ild_blend: float = 0.35,
+        ild_max_db: float = 9.0,
     ) -> None:
         self.samplerate = samplerate
         self.max_tau = max_tau
         self.num_angles = num_angles
         self.smoothing_alpha = smoothing_alpha
+        self.ild_blend = float(np.clip(ild_blend, 0.0, 1.0))
+        self.ild_max_db = max(ild_max_db, 1.0)
         self._smoothed_angle: float | None = None
 
     def estimate(self, left: np.ndarray, right: np.ndarray) -> float:
         """Return azimuth in degrees where 0 is forward, positive to the right."""
         if left.size == 0 or right.size == 0:
             return 0.0
+        left = np.asarray(left, dtype=np.float64)
+        right = np.asarray(right, dtype=np.float64)
+        raw_left = left
+        raw_right = right
         left = left - np.mean(left)
         right = right - np.mean(right)
         n = left.size + right.size
@@ -51,6 +60,16 @@ class DirectionEstimator:
         tau = lags[shift_index] / (self.samplerate * interp)
         theta = math.degrees(math.asin(np.clip(tau / self.max_tau, -1.0, 1.0)))
         theta = float(np.clip(theta, -90.0, 90.0))
+        if self.ild_blend > 0.0:
+            rms_left = float(np.sqrt(np.mean(raw_left**2) + 1e-12))
+            rms_right = float(np.sqrt(np.mean(raw_right**2) + 1e-12))
+            if rms_left > 0.0 and rms_right > 0.0:
+                ild_db = 20.0 * math.log10(rms_left / (rms_right + 1e-12))
+                ild_angle = float(
+                    np.clip(-(ild_db / self.ild_max_db) * 90.0, -90.0, 90.0)
+                )
+                blend = self.ild_blend
+                theta = float((1.0 - blend) * theta + blend * ild_angle)
         if not (0.0 < self.smoothing_alpha < 1.0):
             return theta
         if self._smoothed_angle is None:
@@ -62,10 +81,50 @@ class DirectionEstimator:
         return float(self._smoothed_angle)
 
 
+@dataclass
+class FrontBackDisambiguator:
+    """Rudimentary heuristic to infer front/back by monitoring spectral tilt."""
+
+    smoothing_alpha: float = 0.05
+    gain: float = 3.2
+    min_energy: float = 1e-4
+    ratio_weight: float = 0.45
+    correlation_weight: float = 0.55
+    _baseline_ratio: float | None = None
+
+    def estimate(
+        self,
+        low_band: float,
+        mid_band: float,
+        high_band: float,
+        interaural_correlation: float,
+    ) -> float:
+        eps = 1e-6
+        total_energy = low_band + mid_band + high_band
+        if total_energy < self.min_energy:
+            return float(np.clip(interaural_correlation, -1.0, 1.0))
+
+        ratio = (high_band + eps) / (low_band + eps)
+        if self._baseline_ratio is None:
+            self._baseline_ratio = ratio
+            ratio_score = 0.0
+        else:
+            deviation = ratio - self._baseline_ratio
+            # Adapt baseline more slowly when deviation is large to retain contrast.
+            alpha = self.smoothing_alpha * (0.25 if abs(deviation) > self._baseline_ratio * 0.5 else 1.0)
+            self._baseline_ratio = (1 - alpha) * self._baseline_ratio + alpha * ratio
+            ratio_score = float(np.tanh(deviation * self.gain))
+
+        corr = float(np.clip(interaural_correlation, -1.0, 1.0))
+        score = self.ratio_weight * ratio_score + self.correlation_weight * corr
+        return float(np.clip(score, -1.0, 1.0))
+
+
 def compute_feature_packet(
     frame: np.ndarray,
     samplerate: int,
     estimator: DirectionEstimator | None = None,
+    front_back: FrontBackDisambiguator | None = None,
 ) -> FeaturePacket:
     if frame.ndim != 2 or frame.shape[1] < 2:
         raise ValueError("Frame must have at least two channels for ILD/IPD analysis")
@@ -105,7 +164,18 @@ def compute_feature_packet(
     spectral_flatness = float(np.clip(geometric_mean / arithmetic_mean, 0.0, 1.0))
 
     estimator = estimator or DirectionEstimator(samplerate)
+    front_back = front_back or FrontBackDisambiguator()
     azimuth = estimator.estimate(left, right)
+    centered_left = left - np.mean(left)
+    centered_right = right - np.mean(right)
+    denom = (np.std(centered_left) + eps) * (np.std(centered_right) + eps)
+    interaural_correlation = 0.0 if denom <= eps else float(np.clip(np.mean(centered_left * centered_right) / denom, -1.0, 1.0))
+    front_back_score = front_back.estimate(
+        low_band_energy,
+        mid_band_energy,
+        high_band_energy,
+        interaural_correlation,
+    )
 
     return FeaturePacket(
         timestamp=time.time(),
@@ -118,10 +188,12 @@ def compute_feature_packet(
         mid_band_energy=mid_band_energy,
         high_band_energy=high_band_energy,
         spectral_flatness=spectral_flatness,
+        front_back_score=front_back_score,
     )
 
 
 def feature_stream(frames: Iterable[np.ndarray], samplerate: int) -> Iterable[FeaturePacket]:
     estimator = DirectionEstimator(samplerate)
+    front_back = FrontBackDisambiguator()
     for frame in frames:
-        yield compute_feature_packet(frame, samplerate, estimator)
+        yield compute_feature_packet(frame, samplerate, estimator, front_back)

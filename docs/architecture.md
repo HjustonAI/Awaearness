@@ -48,6 +48,7 @@
   - Rule-based scoring on transient strength, mid-band lift, and high/mid ratio boosts footstep confidence.
   - Low-band dominance with low spectral flatness still flags vehicles, but thresholds float with ambient noise.
   - Broadband, high-amplitude bursts with elevated centroid/high-band energy score gunfire.
+  - A spectral tilt heuristic estimates front/back hemisphere so the HUD can render events behind the player without sign ambiguity.
   - Optional shallow classifier (e.g., scikit-learn RandomForest) trained offline on extracted features.
 - **Interface**: Accepts feature vectors, returns `Event(type, azimuth_deg, confidence, distance_bucket, timestamp)`.
 

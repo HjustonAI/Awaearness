@@ -65,6 +65,10 @@ class HudRenderer:
             "gunfire": (255, 80, 80),
         }
         color = color_map.get(event.kind, FOREGROUND_COLOR)
+        if event.orientation == "back":
+            color = tuple(int(channel * 0.6) for channel in color)
+        elif event.orientation == "ambiguous":
+            color = tuple(int(channel * 0.8) for channel in color)
         size = max(8, int(12 * event.confidence))
         pygame.draw.circle(self.screen, color, pos, size)
         font = pygame.font.SysFont("Segoe UI", 16)

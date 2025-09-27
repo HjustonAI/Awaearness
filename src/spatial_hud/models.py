@@ -23,6 +23,7 @@ class FeaturePacket:
     mid_band_energy: float
     high_band_energy: float
     spectral_flatness: float
+    front_back_score: float = 0.0
 
 
 @dataclass
@@ -32,6 +33,8 @@ class Event:
     distance_bucket: DistanceBucket
     confidence: float
     ttl_ms: int = 1200
+    orientation: Literal["front", "back", "ambiguous"] = "front"
+    raw_azimuth_deg: float = 0.0
 
 
 @dataclass

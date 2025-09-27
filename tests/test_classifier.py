@@ -10,6 +10,7 @@ def make_packet(
     centroid: float,
     bands: list[float],
     azimuth: float = 0.0,
+    front_back_score: float = 0.0,
 ) -> FeaturePacket:
     band_arr = np.array(bands, dtype=float)
     third = max(1, band_arr.size // 3)
@@ -32,6 +33,7 @@ def make_packet(
         mid_band_energy=mid_band,
         high_band_energy=high_band,
         spectral_flatness=spectral_flatness,
+        front_back_score=front_back_score,
     )
 
 
@@ -78,3 +80,34 @@ def test_gunfire_detection():
     event = classifier.classify(packet)
     assert event.kind == "gunfire"
     assert event.distance_bucket is DistanceBucket.NEAR
+
+
+def test_orientation_projection_front_vs_back():
+    classifier = EventClassifier()
+    bands = [0.01] * 32
+    bands[10:22] = [0.02] * 12
+    bands[-12:] = [0.035] * 12
+
+    front_packet = make_packet(
+        energy=0.07,
+        onset=0.09,
+        centroid=1200.0,
+        bands=bands,
+        azimuth=25.0,
+        front_back_score=0.4,
+    )
+    front_event = classifier.classify(front_packet)
+    assert front_event.orientation == "front"
+    assert 0.0 <= front_event.azimuth_deg <= 90.0
+
+    back_packet = make_packet(
+        energy=0.07,
+        onset=0.09,
+        centroid=1200.0,
+        bands=bands,
+        azimuth=25.0,
+        front_back_score=-0.5,
+    )
+    back_event = classifier.classify(back_packet)
+    assert back_event.orientation == "back"
+    assert 90.0 <= back_event.azimuth_deg <= 210.0

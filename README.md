@@ -7,6 +7,7 @@ Assistive heads-up display that visualizes directional game audio for players wi
 - **Signal processing** for interaural level/phase differences and GCC-PHAT direction estimates.
 - **Adaptive direction smoothing** to stabilize azimuth estimates without adding noticeable latency.
 - **Adaptive classifier** blends broadband energy, band ratios, onset cues, and a rolling ambient baseline to tag footsteps, vehicles, and gunfire with confidence and distance buckets even as the soundstage shifts.
+- **Front/back heuristics** estimate hemisphere using spectral tilt so the HUD distinguishes whether events originate in front of or behind the player.
 - **Visual HUD** implemented with `pygame`, creating a transparent, click-through compass overlay.
 - **Mock simulator** that generates synthetic feature packets for development without live audio.
 

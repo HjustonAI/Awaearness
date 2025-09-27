@@ -17,6 +17,16 @@ def _synthetic_feature(
     centroid: float,
     bands: list[float],
 ) -> FeaturePacket:
+    band_arr = np.array(bands, dtype=float)
+    third = len(band_arr) // 3 or 1
+    low_band = float(band_arr[:third].mean())
+    mid_band = float(band_arr[third : 2 * third].mean())
+    high_band = float(band_arr[2 * third :].mean()) if band_arr.size > 2 * third else float(band_arr.mean())
+    eps = 1e-9
+    spectral_flatness = float(
+        np.exp(np.mean(np.log(band_arr + eps))) / (np.mean(band_arr + eps) + eps)
+    )
+
     return FeaturePacket(
         timestamp=time.time(),
         azimuth_deg=azimuth_deg,
@@ -24,6 +34,10 @@ def _synthetic_feature(
         band_energies=bands,
         onset_strength=onset_strength,
         spectral_centroid=centroid,
+        low_band_energy=low_band,
+        mid_band_energy=mid_band,
+        high_band_energy=high_band,
+        spectral_flatness=spectral_flatness,
     )
 
 

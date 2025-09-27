@@ -39,13 +39,15 @@
   2. Inter-channel level difference (ILD) and phase difference (IPD) extraction between left/right or surround pairs.
   3. Beamforming-style energy estimation across azimuth bins via simple generalized cross-correlation with phase transform (GCC-PHAT).
   4. Temporal smoothing using exponential moving averages to stabilize direction estimates.
-- **Outputs**: Direction hypotheses (front-left/right/back), broadband energy, spectral centroid, transient metrics.
+  5. Spectral summaries that bucket low/mid/high energy and compute spectral flatness for downstream heuristics.
+- **Outputs**: Direction hypotheses (front-left/right/back), broadband energy, spectral centroid, transient metrics, and band ratios for low/mid/high energy.
 
 ### 3. Event Classifier
-- **Approach**: Hybrid heuristic + lightweight ML.
-  - Rule-based trigger on envelope/transient profiles for footsteps.
-  - Lower-frequency energy with sustained duration for vehicles.
-  - Broadband, high-amplitude bursts for gunfire.
+- **Approach**: Hybrid heuristic + lightweight ML signals with adaptive scoring.
+  - Exponential ambient tracker maintains rolling baselines for energy, onset, and band energies.
+  - Rule-based scoring on transient strength, mid-band lift, and high/mid ratio boosts footstep confidence.
+  - Low-band dominance with low spectral flatness still flags vehicles, but thresholds float with ambient noise.
+  - Broadband, high-amplitude bursts with elevated centroid/high-band energy score gunfire.
   - Optional shallow classifier (e.g., scikit-learn RandomForest) trained offline on extracted features.
 - **Interface**: Accepts feature vectors, returns `Event(type, azimuth_deg, confidence, distance_bucket, timestamp)`.
 
@@ -60,7 +62,7 @@
 
 ## Data Contracts
 - `AudioFrame`: ndarray shape `(num_channels, frame_size)`.
-- `FeaturePacket`: dataclass containing timestamp, azimuth (deg), energy, band energies, onset metrics.
+- `FeaturePacket`: dataclass containing timestamp, azimuth (deg), energy, per-band energies, onset metrics, low/mid/high band averages, and spectral flatness.
 - `Event`: dataclass {`kind`, `azimuth_deg`, `distance_bucket` ("near" | "mid" | "far"), `confidence` in [0,1], `ttl_ms`}.
 - `HudState`: list of active `Event`s + global compass orientation.
 

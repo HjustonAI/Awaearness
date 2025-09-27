@@ -19,6 +19,10 @@ class FeaturePacket:
     band_energies: list[float]
     onset_strength: float
     spectral_centroid: float
+    low_band_energy: float
+    mid_band_energy: float
+    high_band_energy: float
+    spectral_flatness: float
 
 
 @dataclass

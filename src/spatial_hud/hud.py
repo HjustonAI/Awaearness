@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import queue
 import threading
@@ -12,6 +13,9 @@ from .models import Event, HudState
 WINDOW_SIZE = (400, 400)
 BACKGROUND_COLOR = (10, 10, 10, 0)
 FOREGROUND_COLOR = (40, 200, 255)
+
+
+logger = logging.getLogger(__name__)
 
 
 class HudRenderer:
@@ -28,6 +32,7 @@ class HudRenderer:
         self._click_through = False
         self._dragging = False
         self._configure_window()
+        logger.info("HUD renderer initialized (refresh_rate=%s)", self.refresh_rate)
 
     def draw_compass(self) -> None:
         radius = min(WINDOW_SIZE) // 2 - 20
@@ -48,7 +53,7 @@ class HudRenderer:
     def draw_event(self, event: Event) -> None:
         radius = min(WINDOW_SIZE) // 2 - 40
         center = (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2)
-        angle = math.radians(event.azimuth_deg + 90)
+        angle = math.radians(event.azimuth_deg - 90)
         distance_scale = {"near": 0.6, "mid": 0.8, "far": 1.0}[event.distance_bucket.value]
         pos = (
             int(center[0] + math.cos(angle) * radius * distance_scale),
@@ -84,12 +89,15 @@ class HudRenderer:
             win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, style)
             win32gui.SetLayeredWindowAttributes(hwnd, 0, 235, win32con.LWA_ALPHA)
             self._hwnd = hwnd
+            logger.debug("HUD window configured with transparency")
         except Exception:
             # PyWin32 not available or running on non-Windows platforms.
+            logger.debug("PyWin32 not available; skipping HUD transparency setup", exc_info=True)
             pass
 
     def _set_click_through(self, value: bool) -> None:
         if self._hwnd is None:
+            logger.debug("Click-through requested but HWND not available")
             return
         try:
             import win32con
@@ -101,11 +109,14 @@ class HudRenderer:
             else:
                 style &= ~win32con.WS_EX_TRANSPARENT
             win32gui.SetWindowLong(self._hwnd, win32con.GWL_EXSTYLE, style)
+            logger.debug("Click-through style applied: %s", value)
         except Exception:
+            logger.warning("Failed to update click-through style", exc_info=True)
             pass
 
     def _move_window(self, dx: int, dy: int) -> None:
         if self._hwnd is None:
+            logger.debug("Window move requested but HWND not available")
             return
         try:
             import win32con
@@ -121,7 +132,9 @@ class HudRenderer:
                 0,
                 win32con.SWP_NOZORDER | win32con.SWP_NOSIZE,
             )
+            logger.debug("Window position set to (%s, %s)", left + dx, top + dy)
         except Exception:
+            logger.warning("Failed to reposition HUD window", exc_info=True)
             pass
 
     def handle_event(self, event: pygame.event.Event) -> bool:
@@ -133,6 +146,7 @@ class HudRenderer:
             if event.key == pygame.K_t:
                 self._click_through = not self._click_through
                 self._set_click_through(self._click_through)
+                logger.info("Click-through toggled to %s", self._click_through)
         if not self._click_through:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._dragging = True
@@ -141,6 +155,7 @@ class HudRenderer:
             elif event.type == pygame.MOUSEMOTION and self._dragging:
                 dx, dy = event.rel
                 self._move_window(dx, dy)
+                logger.debug("HUD moved by (%s, %s)", dx, dy)
         return True
 
     def run(self, state_stream: Iterable[HudState]) -> None:
@@ -173,6 +188,7 @@ class HudLoop(threading.Thread):
 
     def run(self) -> None:
         self.renderer = HudRenderer()
+        logger.info("HUD loop thread started")
         try:
             while self._running.is_set():
                 for event in pygame.event.get():
@@ -188,8 +204,10 @@ class HudLoop(threading.Thread):
         finally:
             pygame.quit()
             self.renderer = None
+            logger.info("HUD loop thread exiting")
 
     def stop(self) -> None:
         self._running.clear()
         if self.renderer is not None:
             pygame.event.post(pygame.event.Event(pygame.QUIT))
+            logger.debug("QUIT event posted to HUD loop")

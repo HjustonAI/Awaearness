@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from collections.abc import Iterator
@@ -23,6 +24,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from soundcard import Recorder
 else:
     Recorder = Any
+
+
+logger = logging.getLogger(__name__)
 
 
 class LoopbackCapture:
@@ -53,6 +57,7 @@ class LoopbackCapture:
 
     def start(self) -> None:
         if self._thread is not None:
+            logger.debug("LoopbackCapture.start called but thread already running")
             return
         if sc is None:
             raise RuntimeError(
@@ -62,12 +67,14 @@ class LoopbackCapture:
         speaker = sc.default_speaker()
         if speaker is None:
             raise RuntimeError("No default speaker found for loopback capture.")
+        logger.info("Selected default speaker '%s' for loopback capture", speaker.name)
 
         microphone = sc.get_microphone(speaker.name, include_loopback=True)
         if microphone is None:
             raise RuntimeError(
                 "Loopback device not available. Enable 'Stereo Mix' or check audio driver settings."
             )
+        logger.debug("Using loopback endpoint '%s'", microphone.name)
 
         self._recorder = microphone.recorder(
             samplerate=self.samplerate,
@@ -78,10 +85,17 @@ class LoopbackCapture:
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._capture_worker, daemon=True)
         self._thread.start()
+        logger.info(
+            "Loopback capture thread started (samplerate=%s, blocksize=%s, channels=%s)",
+            self.samplerate,
+            self.blocksize,
+            self.channels,
+        )
 
     def stop(self) -> None:
         with self._lock:
             if self._thread is None:
+                logger.debug("LoopbackCapture.stop called but no thread running")
                 return
             assert self._stop_event is not None
             self._stop_event.set()
@@ -93,11 +107,18 @@ class LoopbackCapture:
                 self._recorder = None
             with self._queue.mutex:
                 self._queue.queue.clear()
+            logger.info("Loopback capture stopped and buffers cleared")
 
     def frames(self) -> Iterator[np.ndarray]:
         """Yield PCM frames as numpy arrays shaped (blocksize, channels)."""
         while True:
-            frame = self._queue.get()
+            try:
+                frame = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                stop_event = self._stop_event
+                if self._thread is None or (stop_event is not None and stop_event.is_set()):
+                    break
+                continue
             yield frame
 
     def _capture_worker(self) -> None:
@@ -107,7 +128,7 @@ class LoopbackCapture:
             try:
                 data = self._recorder.record(self.blocksize)
             except Exception as exc:  # pragma: no cover - hardware failure
-                print(f"[LoopbackCapture] Recorder error: {exc}")
+                logger.exception("Recorder error while capturing audio: %s", exc)
                 break
             if data is None:
                 continue
@@ -122,5 +143,10 @@ class LoopbackCapture:
             try:
                 self._queue.put_nowait(frame)
             except queue.Full:
-                _ = self._queue.get_nowait()
+                try:
+                    _ = self._queue.get_nowait()
+                    logger.warning("Loopback capture queue full; dropping oldest frame")
+                except queue.Empty:
+                    logger.warning("Loopback capture queue full but empty on readback; continuing")
                 self._queue.put_nowait(frame)
+        logger.debug("Capture thread exiting")

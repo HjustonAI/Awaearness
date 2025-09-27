@@ -5,7 +5,8 @@ Assistive heads-up display that visualizes directional game audio for players wi
 ## Features
 - **Loopback capture** using WASAPI to ingest the live stereo mix without modifying games.
 - **Signal processing** for interaural level/phase differences and GCC-PHAT direction estimates.
-- **Heuristic classifier** to tag footsteps, vehicles, and gunfire with confidence and distance buckets.
+- **Adaptive direction smoothing** to stabilize azimuth estimates without adding noticeable latency.
+- **Adaptive classifier** blends broadband energy, band ratios, onset cues, and a rolling ambient baseline to tag footsteps, vehicles, and gunfire with confidence and distance buckets even as the soundstage shifts.
 - **Visual HUD** implemented with `pygame`, creating a transparent, click-through compass overlay.
 - **Mock simulator** that generates synthetic feature packets for development without live audio.
 
@@ -37,6 +38,8 @@ python -m spatial_hud.main
 ```
 This starts the loopback capture pipeline. Launch your game and ensure Windows is outputting stereo/5.1. You should see directional markers appear as footsteps, weapon fire, and vehicles are detected. Latency and accuracy depend on the game mix; adjust classifier thresholds in `spatial_hud/event_classifier.py` if needed.
 If you encounter a message about the `soundcard` package or missing loopback devices, check that the dependency installed correctly and that your default speaker exposes a loopback endpoint (enable "Stereo Mix" in Windows Sound Control Panel if available).
+
+Add `--log-level DEBUG` to surface detailed pipeline diagnostics while tuning thresholds or troubleshooting capture.
 
 **HUD controls**
 - Drag the compass window with the left mouse button to reposition it.
@@ -77,6 +80,7 @@ src/spatial_hud/
 
 ## Calibration & Tuning
 - **Sensitivity**: Adjust `ClassifierConfig` thresholds to match your audio device output. Lower thresholds capture quieter sounds but may increase false positives.
+- **Spectral ratios**: `footstep_high_mid_ratio` and `vehicle_low_mid_ratio` control how much high/low frequency emphasis is required before a detection is emitted.
 - **Direction smoothing**: Increase the FFT window size or apply exponential smoothing in `DirectionEstimator` if the HUD jitter is too high.
 - **Distance buckets**: Tune `near_energy` and `mid_energy` in `ClassifierConfig` to suit different volume levels or surround mixes.
 - **Opacity & colors**: Customize color palettes and font in `spatial_hud/hud.py` for accessibility preferences (e.g., colorblind-safe schemes).

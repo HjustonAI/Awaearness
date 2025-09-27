@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
@@ -8,51 +9,165 @@ import numpy as np
 from .models import DistanceBucket, Event, FeaturePacket
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class ClassifierConfig:
+    # Footstep heuristics
     footstep_onset_threshold: float = 0.05
-    footstep_energy_threshold: float = 0.02
-    gunfire_energy_threshold: float = 0.12
-    gunfire_centroid_threshold: float = 3000.0
-    vehicle_band_energy_threshold: float = 0.04
-    vehicle_low_band_index: int = 2
-    vehicle_high_band_index: int = 5
+    footstep_mid_band_min: float = 0.015
+    footstep_high_mid_ratio: float = 1.15
+    footstep_energy_min: float = 0.04
+    footstep_onset_ratio: float = 1.8
+    footstep_mid_ratio: float = 1.4
+    footstep_energy_ratio: float = 1.5
+    footstep_score_threshold: float = 0.55
 
+    # Gunfire heuristics
+    gunfire_energy_threshold: float = 0.12
+    gunfire_centroid_threshold: float = 3200.0
+    gunfire_high_band_threshold: float = 0.06
+    gunfire_energy_ratio: float = 2.0
+    gunfire_high_ratio: float = 1.5
+    gunfire_onset_ratio: float = 1.8
+    gunfire_score_threshold: float = 0.55
+
+    # Vehicle heuristics
+    vehicle_low_band_threshold: float = 0.045
+    vehicle_low_mid_ratio: float = 1.25
+    vehicle_flatness_max: float = 0.65
+    vehicle_low_dynamic_ratio: float = 1.4
+    vehicle_score_threshold: float = 0.6
+
+    # Ambient / adaptive thresholds
+    ambient_energy_floor: float = 0.012
+    dynamic_energy_multiplier: float = 1.5
+    ambient_decay_alpha: float = 0.05
+    ambient_update_margin: float = 1.25
+
+    # Distance estimation
     near_energy: float = 0.08
     mid_energy: float = 0.04
+    distance_near_ratio: float = 2.2
+    distance_mid_ratio: float = 1.4
+
+
+@dataclass
+class AmbientTracker:
+    alpha: float
+    energy: float | None = None
+    onset: float | None = None
+    low: float | None = None
+    mid: float | None = None
+    high: float | None = None
+
+    def observe(self, feature: FeaturePacket) -> None:
+        values = {
+            "energy": feature.energy,
+            "onset": feature.onset_strength,
+            "low": feature.low_band_energy,
+            "mid": feature.mid_band_energy,
+            "high": feature.high_band_energy,
+        }
+        for attr, new_value in values.items():
+            current = getattr(self, attr)
+            if current is None:
+                setattr(self, attr, new_value)
+            else:
+                setattr(self, attr, (1 - self.alpha) * current + self.alpha * new_value)
+
+    def baseline(self, attr: str, fallback: float) -> float:
+        value = getattr(self, attr)
+        return fallback if value is None else value
 
 
 class EventClassifier:
     def __init__(self, config: ClassifierConfig | None = None) -> None:
         self.config = config or ClassifierConfig()
+        self._ambient = AmbientTracker(alpha=self.config.ambient_decay_alpha)
 
-    def classify_distance(self, energy: float) -> DistanceBucket:
-        if energy >= self.config.near_energy:
+    def classify_distance(self, energy: float, baseline_energy: float) -> DistanceBucket:
+        near_threshold = max(self.config.near_energy, baseline_energy * self.config.distance_near_ratio)
+        mid_threshold = max(self.config.mid_energy, baseline_energy * self.config.distance_mid_ratio)
+        if energy >= near_threshold:
             return DistanceBucket.NEAR
-        if energy >= self.config.mid_energy:
+        if energy >= mid_threshold:
             return DistanceBucket.MID
         return DistanceBucket.FAR
 
     def classify(self, feature: FeaturePacket) -> Event:
-        band_arr = np.array(feature.band_energies, dtype=float)
-        low_band_power = float(
-            band_arr[self.config.vehicle_low_band_index : self.config.vehicle_high_band_index + 1].mean()
-        )
+        cfg = self.config
+        eps = 1e-6
 
-        if feature.energy >= self.config.gunfire_energy_threshold and feature.spectral_centroid >= self.config.gunfire_centroid_threshold:
-            kind = "gunfire"
-            confidence = 0.75 + min(0.2, (feature.spectral_centroid - self.config.gunfire_centroid_threshold) / 10)
-        elif low_band_power >= self.config.vehicle_band_energy_threshold:
-            kind = "vehicle"
-            confidence = 0.5 + min(0.3, low_band_power)
-        elif feature.onset_strength >= self.config.footstep_onset_threshold and feature.energy >= self.config.footstep_energy_threshold:
-            kind = "footstep"
-            confidence = 0.6 + min(0.35, feature.energy * 2)
+        baseline_energy = self._ambient.baseline("energy", cfg.ambient_energy_floor)
+        baseline_onset = self._ambient.baseline("onset", cfg.footstep_onset_threshold * 0.5)
+        baseline_mid = self._ambient.baseline("mid", cfg.footstep_mid_band_min * 0.5)
+        baseline_low = self._ambient.baseline("low", cfg.vehicle_low_band_threshold * 0.5)
+        baseline_high = self._ambient.baseline("high", cfg.gunfire_high_band_threshold * 0.5)
+
+        dynamic_energy_floor = max(cfg.ambient_energy_floor, baseline_energy * cfg.dynamic_energy_multiplier)
+        high_mid_ratio = feature.high_band_energy / (feature.mid_band_energy + eps)
+        low_mid_ratio = feature.low_band_energy / (feature.mid_band_energy + eps)
+
+        footstep_components = [
+            (feature.energy >= max(cfg.footstep_energy_min, baseline_energy * cfg.footstep_energy_ratio), 0.2),
+            (feature.onset_strength >= max(cfg.footstep_onset_threshold, baseline_onset * cfg.footstep_onset_ratio), 0.35),
+            (feature.mid_band_energy >= max(cfg.footstep_mid_band_min, baseline_mid * cfg.footstep_mid_ratio), 0.3),
+            (high_mid_ratio >= cfg.footstep_high_mid_ratio, 0.15),
+        ]
+        footstep_score = sum(weight for condition, weight in footstep_components if condition)
+
+        vehicle_components = [
+            (feature.low_band_energy >= max(cfg.vehicle_low_band_threshold, baseline_low * cfg.vehicle_low_dynamic_ratio), 0.45),
+            (low_mid_ratio >= cfg.vehicle_low_mid_ratio, 0.25),
+            (feature.spectral_flatness <= cfg.vehicle_flatness_max, 0.2),
+            (feature.energy >= dynamic_energy_floor, 0.1),
+        ]
+        vehicle_score = sum(weight for condition, weight in vehicle_components if condition)
+
+        gunfire_components = [
+            (feature.energy >= max(cfg.gunfire_energy_threshold, baseline_energy * cfg.gunfire_energy_ratio), 0.4),
+            (feature.spectral_centroid >= cfg.gunfire_centroid_threshold, 0.3),
+            (feature.high_band_energy >= max(cfg.gunfire_high_band_threshold, baseline_high * cfg.gunfire_high_ratio), 0.2),
+            (feature.onset_strength >= max(cfg.footstep_onset_threshold, baseline_onset * cfg.gunfire_onset_ratio), 0.1),
+        ]
+        gunfire_score = sum(weight for condition, weight in gunfire_components if condition)
+
+        scores = {
+            "footstep": (footstep_score, cfg.footstep_score_threshold),
+            "vehicle": (vehicle_score, cfg.vehicle_score_threshold),
+            "gunfire": (gunfire_score, cfg.gunfire_score_threshold),
+        }
+
+        best_kind, (best_score, threshold) = max(scores.items(), key=lambda item: item[1][0])
+        if best_score >= threshold:
+            kind = best_kind
+            confidence = min(1.0, best_score)
         else:
             kind = "ambient"
-            confidence = 0.3
+            confidence = 0.0
 
-        distance = self.classify_distance(feature.energy)
+        distance = self.classify_distance(feature.energy, baseline_energy)
+
+        logger.debug(
+            "Classified event: kind=%s score=%.2f energy=%.3f centroid=%.1f onset=%.3f low=%.3f mid=%.3f high=%.3f flat=%.2f ratio_high_mid=%.2f ratio_low_mid=%.2f distance=%s",
+            kind,
+            best_score,
+            feature.energy,
+            feature.spectral_centroid,
+            feature.onset_strength,
+            feature.low_band_energy,
+            feature.mid_band_energy,
+            feature.high_band_energy,
+            feature.spectral_flatness,
+            high_mid_ratio,
+            low_mid_ratio,
+            distance.value,
+        )
+
+        if kind == "ambient" or feature.energy <= cfg.ambient_energy_floor * cfg.ambient_update_margin:
+            self._ambient.observe(feature)
 
         return Event(
             kind=kind,

@@ -1,0 +1,12 @@
+[
+  {"file": "tests/audio_reference/slices/top_left.wav",    "orientation": "top_left",    "notes": "Atmos demo 1:11 segment"},
+  {"file": "tests/audio_reference/slices/top_right.wav",   "orientation": "top_right"},
+  {"file": "tests/audio_reference/slices/top_center.wav",  "orientation": "top_center"},
+  {"file": "tests/audio_reference/slices/subwoofer.wav",   "orientation": "subwoofer"},
+  {"file": "tests/audio_reference/slices/middle_left.wav", "orientation": "left"},
+  {"file": "tests/audio_reference/slices/middle_right.wav","orientation": "right"},
+  {"file": "tests/audio_reference/slices/bottom_left.wav", "orientation": "back_left"},
+  {"file": "tests/audio_reference/slices/bottom_right.wav","orientation": "back_right"},
+  {"file": "tests/audio_reference/slices/above_left.wav",  "orientation": "top_left"},
+  {"file": "tests/audio_reference/slices/above_right.wav", "orientation": "top_right"}
+]

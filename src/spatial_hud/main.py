@@ -12,8 +12,7 @@ from .audio_capture import LoopbackCapture
 from .event_classifier import EventClassifier
 from .hud import HudLoop
 from .models import Event, HudState
-from .signal_processing import feature_stream
-from .simulation import offline_feature_stream
+from .hrtf_processing import feature_stream
 
 
 logger = logging.getLogger(__name__)
@@ -43,23 +42,22 @@ class Pipeline:
         self._hud_thread: HudLoop | None = None
 
     def start(self, use_mock: bool = False) -> None:
-        logger.info("Starting pipeline (use_mock=%s)", use_mock)
+        logger.info("Starting HRTF-based audio radar pipeline")
         hud_thread = HudLoop(self.state_queue)
         hud_thread.start()
         self._threads.append(hud_thread)
         self._hud_thread = hud_thread
 
         if use_mock:
-            logger.info("Using offline feature stream for mock mode")
-            feature_iterable = offline_feature_stream()
-        else:
-            self.capture.start()
-            feature_iterable = feature_stream(self.capture.frames(), self.capture.samplerate)
-            logger.info(
-                "Live capture initialized (samplerate=%s, blocksize=%s)",
-                self.capture.samplerate,
-                self.capture.blocksize,
-            )
+            logger.warning("Mock mode not supported - using live audio")
+        
+        self.capture.start()
+        feature_iterable = feature_stream(self.capture.frames(), self.capture.samplerate)
+        logger.info(
+            "HRTF processing initialized (samplerate=%s, blocksize=%s)",
+            self.capture.samplerate,
+            self.capture.blocksize,
+        )
 
         processing_thread = threading.Thread(
             target=self._processing_loop,

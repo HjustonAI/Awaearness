@@ -4,11 +4,14 @@ import logging
 import math
 import queue
 import threading
+import time
 from typing import Iterable
 
 import pygame
 
+
 from .models import Event, HudState
+from .config import ConfigManager
 
 WINDOW_SIZE = (400, 400)
 BACKGROUND_COLOR = (10, 10, 10, 0)
@@ -31,6 +34,18 @@ class HudRenderer:
         self._hwnd: int | None = None
         self._click_through = False
         self._dragging = False
+        self._calibration_lr = False 
+        self._calibration_fb = False
+        self._calibration_rot = 0.0
+        self._toast_message: str | None = None
+        self._toast_expiry: float = 0.0
+        
+        # Load config
+        self.config = ConfigManager.load()
+        self._calibration_lr = self.config.get("invert_lr", False)
+        self._calibration_fb = self.config.get("invert_fb", False)
+        self._calibration_rot = self.config.get("rotation", 0.0)
+        
         self._configure_window()
         logger.info("HUD renderer initialized (refresh_rate=%s)", self.refresh_rate)
 
@@ -53,7 +68,15 @@ class HudRenderer:
     def draw_event(self, event: Event) -> None:
         radius = min(WINDOW_SIZE) // 2 - 40
         center = (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2)
-        angle = math.radians(event.azimuth_deg - 90)
+        angle_deg = event.azimuth_deg
+        if self._calibration_lr:
+            angle_deg = -angle_deg
+        if self._calibration_fb:
+            angle_deg = 180.0 - angle_deg
+        
+        angle_deg += self._calibration_rot
+        
+        angle = math.radians(angle_deg - 90)
         distance_scale = {"near": 0.6, "mid": 0.8, "far": 1.0}[event.distance_bucket.value]
         pos = (
             int(center[0] + math.cos(angle) * radius * distance_scale),
@@ -65,9 +88,17 @@ class HudRenderer:
             "gunfire": (255, 80, 80),
         }
         color = color_map.get(event.kind, FOREGROUND_COLOR)
-        if event.orientation == "back":
+        # Flip orientation logic if F/B flipped
+        orientation = event.orientation
+        if self._calibration_fb:
+            if orientation == "front":
+                orientation = "back"
+            elif orientation == "back":
+                orientation = "front"
+
+        if orientation == "back":
             color = tuple(int(channel * 0.6) for channel in color)
-        elif event.orientation == "ambiguous":
+        elif orientation == "ambiguous":
             color = tuple(int(channel * 0.8) for channel in color)
         size = max(8, int(12 * event.confidence))
         pygame.draw.circle(self.screen, color, pos, size)
@@ -80,6 +111,13 @@ class HudRenderer:
         self.draw_compass()
         for event in state.events:
             self.draw_event(event)
+        
+        # Draw toast
+        if self._toast_message and time.time() < self._toast_expiry:
+             font = pygame.font.SysFont("Segoe UI", 24, bold=True)
+             label = font.render(self._toast_message, True, (255, 255, 255))
+             self.screen.blit(label, (WINDOW_SIZE[0]//2 - label.get_width()//2, WINDOW_SIZE[1] - 50))
+             
         pygame.display.update()
 
     def _configure_window(self) -> None:
@@ -141,6 +179,10 @@ class HudRenderer:
             logger.warning("Failed to reposition HUD window", exc_info=True)
             pass
 
+    def _show_toast(self, message: str, duration: float = 2.0) -> None:
+        self._toast_message = message
+        self._toast_expiry = time.time() + duration
+
     def handle_event(self, event: pygame.event.Event) -> bool:
         if event.type == pygame.QUIT:
             return False
@@ -150,7 +192,28 @@ class HudRenderer:
             if event.key == pygame.K_t:
                 self._click_through = not self._click_through
                 self._set_click_through(self._click_through)
+                self._show_toast(f"Click-through: {'ON' if self._click_through else 'OFF'}")
                 logger.info("Click-through toggled to %s", self._click_through)
+            if event.key == pygame.K_m:
+                 self._calibration_lr = not self._calibration_lr
+                 self._show_toast(f"Mirror L/R: {'ON' if self._calibration_lr else 'OFF'}")
+            if event.key == pygame.K_f:
+                 self._calibration_fb = not self._calibration_fb
+                 self._show_toast(f"Flip F/B: {'ON' if self._calibration_fb else 'OFF'}")
+            if event.key == pygame.K_LEFTBRACKET:
+                 self._calibration_rot -= 5.0
+                 self._show_toast(f"Rotation: {self._calibration_rot:.0f}°")
+            if event.key == pygame.K_RIGHTBRACKET:
+                 self._calibration_rot += 5.0
+                 self._show_toast(f"Rotation: {self._calibration_rot:.0f}°")
+            if event.key == pygame.K_s and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                 ConfigManager.save({
+                     "invert_lr": self._calibration_lr,
+                     "invert_fb": self._calibration_fb,
+                     "rotation": self._calibration_rot,
+                 })
+                 self._show_toast("Settings Saved!")
+
         if not self._click_through:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._dragging = True

@@ -11,8 +11,9 @@ class DistanceBucket(str, Enum):
     FAR = "far"
 
 
-@dataclass
+@dataclass(slots=True)
 class FeaturePacket:
+    """Unified feature packet for HRTF audio analysis."""
     timestamp: float
     azimuth_deg: float
     energy: float
@@ -23,7 +24,14 @@ class FeaturePacket:
     mid_band_energy: float
     high_band_energy: float
     spectral_flatness: float
+    direction_confidence: float = 0.0
     front_back_score: float = 0.0
+    # Extended HRTF features (optional, for ML)
+    spectral_spread: float = 0.0
+    spectral_rolloff: float = 0.0
+    pinna_notch_ratio: float = 0.0
+    high_freq_rolloff: float = 0.0
+    interaural_coherence: float = 0.0
 
 
 @dataclass

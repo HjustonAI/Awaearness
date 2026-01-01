@@ -35,7 +35,7 @@ class LoopbackCapture:
     def __init__(
         self,
         samplerate: int = 48_000,
-        channels: int = 2,
+        channels: int = 8,
         blocksize: int = 1024,
         ring_size: int = 32,
     ) -> None:
